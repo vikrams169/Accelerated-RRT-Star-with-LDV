@@ -1,14 +1,14 @@
-# Demonstration and Visualization of the A* Algorithm a 2D Grid World
-# Compatible with Python 3.8.1 and pygame 2.1.2
+# Demonstration and Visualization of the Accelerated RRT with LDV Algorithm a 2D Grid World
 
 # Importing the Required Libraries
 import numpy as np
 import pygame
 import math
 import random
+import time
 
 # Information for saving the animation frames
-dir_name = "rrt_star_frames"
+dir_name = "acc_rrt_star_ldv_frames"
 frame_number = 0
 
 # Initializing variables defining the world and algorithm
@@ -19,25 +19,38 @@ NODE_RADIUS = 3							# Radius of the circle displayed for each node
 GOAL_RADIUS = 20						# Radius of goal reachability to ensure the algorithm has finished
 EPSILON = 15							# Determines how far to place each node from its parent
 REWIRING_RADIUS = 30   					# Radius to search for nodes to rewire/compare cost
+OBS_CLERANACE = 10						# Clearance around obstacles to prevent nodes getting too close
+CORNER_RADIUS = 10						# Ditsance beyond obstacle clearance where biased LDV nodes will get sampled from
 
-# Defining different map types (based on obstacles) to perform RRT* on
+# Defining different map types (based on obstacles) to perform Accelerated RRT* with LDV
 # Rectangles: (left,top,width,height)
 # Circles: (centre_x,centre_y,radius)
-OBSTACLES = [{"rectangles":[(300,300,150,600),(700,500,250,100)],"circles":[(850,150,100)]},{"rectangles":[(700,50,50,900)],"circles":[(350,650,200),(900,300,50)]}]
-OBSTACLES_CLEARANCE = [{"rectangles":[(295,295,160,610),(695,495,260,110)],"circles":[(850,150,105)]},{"rectangles":[(695,45,60,910)],"circles":[(350,650,205),(900,300,55)]}]
-MAP_TYPE = 1
+OBSTACLES = [{"rectangles":[(300,300,150,600),(700,500,250,100)],"circles":[(850,150,100)]},
+			 {"rectangles":[(700,50,50,900)],"circles":[(350,650,200),(900,300,50)]},
+			 {"rectangles":[(210,410,580,80),(210,510,580,80)],"circles":[(500,300,80),(500,700,80)]}]
+OBSTACLES_CLEARANCE = [{"rectangles":[(295,295,160,610),(695,495,260,110)],"circles":[(850,150,105)]},
+					   {"rectangles":[(695,45,60,910)],"circles":[(350,650,205),(900,300,55)]},
+					   {"rectangles":[(205,405,590,90),(205,505,590,90)],"circles":[(500,300,90),(500,700,90)]}]
+OBSTACLES_CORNER = [{"rectangles":[(300,300,150,600),(700,500,250,100)],"circles":[(850,150,100)]},
+			 {"rectangles":[(700,50,50,900)],"circles":[(350,650,200),(900,300,50)]},
+			 {"rectangles":[(200,400,600,100),(200,500,600,100)],"circles":[(500,300,100),(500,700,100)]}]
+MAP_TYPE = 2
 
 # Defining colour values across the RGB Scale
 WHITE = (255,255,255)
 BLACK = (0,0,0)
-GRAY = (254, 254, 254)
+GRAY = (128,128,128)
+OFF_WHITE = (254, 254, 254)
 GREEN = (0,255,0)
 RED = (255,0,0)
 BLUE = (0,0,255)
 ORANGE = (255,164.5,0)
 
-TARGET_REACHED = False
-LDV_PROB = 0.8
+# Parameters specific to Accelerated RRT* with LDV
+TARGET_REACHED = False 		# Whether the target has been reached (at least a single solution has been found)
+LDV_PROB = 0.5				# The probability of using a biased LDV sample after finding atleast a single solution 
+MAX_EXECUTION_TIME = 15		# Maximim execution time given for the code to run and compute the path
+WAYPOINTS = []				# Set of waypoints for the robot to travel along to reach the goal using the path with the lowest cost
 
 # A class to define the characteristics of each grid cell (generalized to each discrete data point in a robotic configuration space)
 class Node:
@@ -52,7 +65,6 @@ class Node:
 		self.start_node = start_node
 		self.target_node = target_node
 		self.best_path_cost = 1e10
-		#self.best_goal_parent = None
 		self.all_goal_parents = []
 		if self.start_node:
 			self.cost = 0
@@ -72,6 +84,12 @@ class Node:
 def initialize_obstacles(viz_window):
 	global frame_number
 	obstacle_list = {"rectangles":[],"circles":[]}
+	for rect in OBSTACLES_CORNER[int(MAP_TYPE)]["rectangles"]:
+		obstacle_list["rectangles"].append(pygame.Rect(rect)) 
+		pygame.draw.rect(viz_window,OFF_WHITE,pygame.Rect(rect))
+	for circle in OBSTACLES_CORNER[int(MAP_TYPE)]["circles"]:
+		obstacle_list["circles"].append(circle)
+		pygame.draw.circle(viz_window,OFF_WHITE,(circle[0],circle[1]),circle[2],width=0)
 	for rect in OBSTACLES_CLEARANCE[int(MAP_TYPE)]["rectangles"]:
 		obstacle_list["rectangles"].append(pygame.Rect(rect)) 
 		pygame.draw.rect(viz_window,GRAY,pygame.Rect(rect))
@@ -89,33 +107,27 @@ def initialize_obstacles(viz_window):
 	frame_number += 1
 	return obstacle_list
 
-# Checking if the new point generated collides with any obstacles in the environment
-def obstacle_collision(point,obstacle_list):
-	for rect in obstacle_list["rectangles"]:
-		if rect.collidepoint(point):
-			return True
-	for circle in obstacle_list["circles"]:
-		if math.sqrt((point[0]-circle[0])**2 + (point[1]-circle[1])**2) < circle[2]:
-			return True
-	return False
-
+# A function to check whether a given position/coordinate falls within an obstacle or not
 def in_obstacle(viz_window,point):
 	check_point = np.array([int(point[0]),int(point[1])])
-	if np.array_equal(viz_window.get_at(check_point)[:3],BLACK):
+	if np.array_equal(viz_window.get_at(check_point)[:3],BLACK) or np.array_equal(viz_window.get_at(check_point)[:3],GRAY):
 		return True
 	else:
 		return False
 
+# A function to check whether a given position/coordinate falls within a certain distance of an obstacle boundary
 def is_corner_node(viz_window,point):
 	check_point = np.array([int(point[0]),int(point[1])])
-	if np.array_equal(viz_window.get_at(check_point)[:3],GRAY):
+	if np.array_equal(viz_window.get_at(check_point)[:3],OFF_WHITE):
 		return True
 	else:
 		return False
 
+# Generating a random coordinate sample in the gridworld
 def random_sample():
 	return (random.random()*WINDOW_LENGTH,random.random()*WINDOW_BREADTH)
 
+# Generating a coordinate sample around points near obstacles boundaries with a high local directional visibility (LDV)
 def LDV_sample(corner_node_list):
 	importances = []
 	for node in corner_node_list:
@@ -131,6 +143,7 @@ def LDV_sample(corner_node_list):
 	new_pos[1] = max(min(new_pos[1],WINDOW_BREADTH-1),0)
 	return (new_pos[0],new_pos[1])
 
+# Coordinate sampling policy of Accelerated RRT* with LDV
 def sample_point(corner_node_list):
 	if not TARGET_REACHED:
 		return random_sample()
@@ -162,7 +175,8 @@ def find_proximal_node(new_node,node_list):
 		proximal_node.children.append(new_node)
 		return new_node, True
 
-def get_node_visibility(viz_window,node,theta,step=3):
+# Generating the visibility of a node
+def get_node_visibility(viz_window,node,theta,step=2):
 	visibility = 0.0
 	current = [node.x,node.y]
 	while True:
@@ -227,88 +241,90 @@ def target_reached(node,goal):
 		return True
 	return False
 
-# Highliting the final RRT path from starting to target node
+# Highliting the best RRT path from starting to target node in Red
 def display_final_path(viz_window,goal_node):
-	global frame_number
+	global frame_number, WAYPOINTS
 	current_node = goal_node
-	while not current_node.start_node:
-		pygame.draw.line(viz_window,GREEN,(current_node.x,current_node.y),(current_node.parent.x,current_node.parent.y),width=5)
-		current_node = current_node.parent
-	pygame.display.update()
-	#pygame.image.save(viz_window,dir_name+"/frame"+str(frame_number)+".jpg")
-	frame_number += 1
-
-def display_all_paths(viz_window,goal_node):
-	global frame_number
-	#for parent_node in goal_node.all_goal_parents:
-	#	pygame.draw.line(viz_window,RED,(goal_node.x,goal_node.y),(parent_node.x,parent_node.y),width=5)
-	#	current_node = parent_node
-	#	while not current_node.start_node:
-	#		pygame.draw.line(viz_window,RED,(current_node.x,current_node.y),(current_node.parent.x,current_node.parent.y),width=5)
-	#		current_node = current_node.parent
-	pygame.draw.line(viz_window,RED,(goal_node.x,goal_node.y),(goal_node.parent.x,goal_node.parent.y),width=5)
-	current_node = goal_node.parent
+	WAYPOINTS.append([current_node.x,current_node.y])
 	while not current_node.start_node:
 		pygame.draw.line(viz_window,RED,(current_node.x,current_node.y),(current_node.parent.x,current_node.parent.y),width=5)
 		current_node = current_node.parent
+		WAYPOINTS.append([current_node.x,current_node.y])
+	WAYPOINTS.reverse()
+	print(WAYPOINTS)
 	pygame.display.update()
 	#pygame.image.save(viz_window,dir_name+"/frame"+str(frame_number)+".jpg")
 	frame_number += 1
 
-# The RRT* Algorithm
-def rrt_algorithm(viz_window,start_node,goal_node,obstacle_list):
+# Highliting all the found RRT paths from starting to target node in Green
+def display_all_paths(viz_window,goal_node):
+	global frame_number
+	for parent_node in goal_node.all_goal_parents:
+		pygame.draw.line(viz_window,GREEN,(goal_node.x,goal_node.y),(parent_node.x,parent_node.y),width=5)
+		current_node = parent_node
+		while not current_node.start_node:
+			pygame.draw.line(viz_window,GREEN,(current_node.x,current_node.y),(current_node.parent.x,current_node.parent.y),width=5)
+			current_node = current_node.parent
+	pygame.display.update()
+	#pygame.image.save(viz_window,dir_name+"/frame"+str(frame_number)+".jpg")
+	frame_number += 1
+
+# The Accelrated RRT* with LDV Algorithm Wrapper function
+def acc_rrt_ldv_algorithm(viz_window,start_node,goal_node,obstacle_list):
+	start_time = time.time()
 	global TARGET_REACHED
 	node_list = []
 	corner_node_list = []
 	node_list.append(start_node)
 	i = 0
 	while True:
+		current_time = time.time()
+		if current_time - start_time > MAX_EXECUTION_TIME:
+			display_final_path(viz_window,goal_node)
+			break
 		new_node, node_list, corner_node_list = add_new_node(viz_window,node_list,corner_node_list,obstacle_list)
 		if target_reached(new_node,goal_node):
 			TARGET_REACHED = True
 			goal_node.all_goal_parents.append(new_node)
 			path_cost = (goal_node.x - new_node.x)**2 + (goal_node.y - new_node.y)**2 + new_node.cost
+			pygame.draw.line(viz_window,BLUE,(new_node.x,new_node.y),(new_node.parent.x,new_node.parent.y))
 			if path_cost < goal_node.best_path_cost:
 				goal_node.best_path_cost = path_cost
 				goal_node.parent = new_node
-			pygame.draw.line(viz_window,BLUE,(new_node.x,new_node.y),(new_node.parent.x,new_node.parent.y))
-			if i == 0:
-				node_list.append(goal_node)
-				i += 1
-			display_all_paths(viz_window,goal_node)
-			#display_final_path(viz_window,goal_node)
+				display_all_paths(viz_window,goal_node)
 
-# Initializing the grid world as a pygame display window,
-pygame.display.set_caption('RRT* Path Finding Algorithm Visualization')
-viz_window = pygame.display.set_mode((WINDOW_LENGTH,WINDOW_BREADTH))
-viz_window.fill(WHITE)
-pygame.display.update()
+if __name__ == "__main__":
+	# Initializing the grid world as a pygame display window,
+	pygame.display.set_caption('RRT* Path Finding Algorithm Visualization')
+	viz_window = pygame.display.set_mode((WINDOW_LENGTH,WINDOW_BREADTH))
+	viz_window.fill(WHITE)
+	pygame.display.update()
 
-# Running RRT till completion
-execute = True
-start_pos, target_pos = None, None
-start_node_found, target_node_found = False, False
-start_node, target_node = None, None
-obstacle_list = initialize_obstacles(viz_window)
-while execute:
-	for event in pygame.event.get():
-		if event.type == pygame.QUIT:
-			execute = False
-		elif pygame.mouse.get_pressed()[0]:
-			pos = pygame.mouse.get_pos()
-			if not start_node_found and pos!=target_pos:
-				start_pos = pos
-				start_node = Node(start_pos,True,False)
-				start_node.visualize_node(viz_window)
-				start_node_found = True
-			elif not target_node_found and pos!=start_pos:
-				target_pos = pos
-				target_node = Node(target_pos,False,True)
-				target_node.visualize_node(viz_window)
-				target_node_found = True
-		if event.type == pygame.KEYDOWN:
-			if event.key == pygame.K_SPACE and start_node_found and target_node_found:
-				rrt_algorithm(viz_window,start_node,target_node,obstacle_list)
-			if event.key == pygame.K_c:
-				start_node = None
-				goal_node_node = None
+	# Running Algorihm till the maximum execution time
+	execute = True
+	start_pos, target_pos = None, None
+	start_node_found, target_node_found = False, False
+	start_node, target_node = None, None
+	obstacle_list = initialize_obstacles(viz_window)
+	while execute:
+		for event in pygame.event.get():
+			if event.type == pygame.QUIT:
+				execute = False
+			elif pygame.mouse.get_pressed()[0]:
+				pos = pygame.mouse.get_pos()
+				if not start_node_found and pos!=target_pos:
+					start_pos = pos
+					start_node = Node(start_pos,True,False)
+					start_node.visualize_node(viz_window)
+					start_node_found = True
+				elif not target_node_found and pos!=start_pos:
+					target_pos = pos
+					target_node = Node(target_pos,False,True)
+					target_node.visualize_node(viz_window)
+					target_node_found = True
+			if event.type == pygame.KEYDOWN:
+				if event.key == pygame.K_SPACE and start_node_found and target_node_found:
+					acc_rrt_ldv_algorithm(viz_window,start_node,target_node,obstacle_list)
+				if event.key == pygame.K_c:
+					start_node = None
+					goal_node_node = None
