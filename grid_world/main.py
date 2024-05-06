@@ -34,7 +34,7 @@ OBSTACLES_CLEARANCE = [{"rectangles":[(295,295,160,610),(695,495,260,110)],"circ
 OBSTACLES_CORNER = [{"rectangles":[(300,300,150,600),(700,500,250,100)],"circles":[(850,150,100)]},
 			 {"rectangles":[(700,50,50,900)],"circles":[(350,650,200),(900,300,50)]},
 			 {"rectangles":[(200,400,600,100),(200,500,600,100)],"circles":[(500,300,100),(500,700,100)]}]
-MAP_TYPE = 2
+MAP_TYPE = 1
 
 # Defining colour values across the RGB Scale
 WHITE = (255,255,255)
