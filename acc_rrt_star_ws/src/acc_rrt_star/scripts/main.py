@@ -1,19 +1,24 @@
+#!/usr/bin/env python3
 # Demonstration and Visualization of the Accelerated RRT with LDV Algorithm a 2D Grid World
 
 # Importing the Required Libraries
-import os
 import numpy as np
 import pygame
 import math
 import random
-import cv2
-import imageio
-import shutil
 import time
+
+#ROS Imports
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Point
+from nav_msgs.msg import Odometry
+from tf_transformations import euler_from_quaternion
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 # Information for saving the animation frames
 dir_name = "acc_rrt_star_ldv_frames"
-vid_name = "sample.mp4"
 frame_number = 0
 
 # Initializing variables defining the world and algorithm
@@ -32,14 +37,14 @@ CORNER_RADIUS = 10						# Ditsance beyond obstacle clearance where biased LDV no
 # Circles: (centre_x,centre_y,radius)
 OBSTACLES = [{"rectangles":[(300,300,150,600),(700,500,250,100)],"circles":[(850,150,100)]},
 			 {"rectangles":[(700,50,50,900)],"circles":[(350,650,200),(900,300,50)]},
-			 {"rectangles":[(210,395,580,80),(210,525,580,80)],"circles":[(500,280,80),(500,720,80)]}]
+			 {"rectangles":[(210,410,580,80),(210,510,580,80)],"circles":[(500,300,80),(500,700,80)]}]
 OBSTACLES_CLEARANCE = [{"rectangles":[(295,295,160,610),(695,495,260,110)],"circles":[(850,150,105)]},
 					   {"rectangles":[(695,45,60,910)],"circles":[(350,650,205),(900,300,55)]},
-			           {"rectangles":[(205,390,590,90),(205,520,590,90)],"circles":[(500,280,85),(500,720,85)]}]
-OBSTACLES_CORNER = [{"rectangles":[(300,300,170,620),(700,500,270,120)],"circles":[(850,150,110)]},
-			 {"rectangles":[(700,50,70,920)],"circles":[(350,650,210),(900,300,60)]},
-			 {"rectangles":[(200,385,600,100),(200,515,600,100)],"circles":[(500,280,90),(500,720,90)]}]
-MAP_TYPE = 1
+					   {"rectangles":[(190,390,630,130),(190,490,630,130)],"circles":[(500,300,130),(500,700,130)]}]
+OBSTACLES_CORNER = [{"rectangles":[(300,300,150,600),(700,500,250,100)],"circles":[(850,150,100)]},
+			 {"rectangles":[(700,50,50,900)],"circles":[(350,650,200),(900,300,50)]},
+			 {"rectangles":[(185,385,640,140),(185,485,640,140)],"circles":[(500,300,140),(500,700,140)]}]
+MAP_TYPE = 2
 
 # Defining colour values across the RGB Scale
 WHITE = (255,255,255)
@@ -54,19 +59,11 @@ ORANGE = (255,164.5,0)
 # Parameters specific to Accelerated RRT* with LDV
 TARGET_REACHED = False 		# Whether the target has been reached (at least a single solution has been found)
 LDV_PROB = 0.5				# The probability of using a biased LDV sample after finding atleast a single solution 
-MAX_EXECUTION_TIME = 20		# Maximim execution time given for the code to run and compute the path
+MAX_EXECUTION_TIME = 10		# Maximim execution time given for the code to run and compute the path
 WAYPOINTS = []				# Set of waypoints for the robot to travel along to reach the goal using the path with the lowest cost
 
-# Function to make a video from a set of frames in a directory
-def make_video(frames_directory,video_name):
-    num_frames = len(os.listdir(frames_directory))
-    with imageio.get_writer(video_name,mode='I',fps=100) as writer:
-        for i in range(num_frames):
-            image = imageio.imread(frames_directory+"/frame"+str(i)+".jpg")
-            writer.append_data(image)
-
 # A class to define the characteristics of each grid cell (generalized to each discrete data point in a robotic configuration space)
-class Node:
+class RRT_Node:
 
 	def __init__(self,coord,start_node=False,target_node=False):
 		self.x = coord[0]
@@ -90,7 +87,7 @@ class Node:
 			colour = ORANGE
 		pygame.draw.circle(viz_window,colour,(self.x,self.y),NODE_RADIUS,width=0)
 		pygame.display.update()
-		pygame.image.save(viz_window,dir_name+"/frame"+str(frame_number)+".jpg")
+		#pygame.image.save(viz_window,dir_name+"/frame"+str(frame_number)+".jpg")
 		frame_number += 1
 
 # Initializing obstacles on the map
@@ -116,7 +113,7 @@ def initialize_obstacles(viz_window):
 		obstacle_list["circles"].append(circle)
 		pygame.draw.circle(viz_window,BLACK,(circle[0],circle[1]),circle[2],width=0)
 	pygame.display.update()
-	pygame.image.save(viz_window,dir_name+"/frame"+str(frame_number)+".jpg")
+	#pygame.image.save(viz_window,dir_name+"/frame"+str(frame_number)+".jpg")
 	frame_number += 1
 	return obstacle_list
 
@@ -219,7 +216,7 @@ def rewire_nodes(new_node,node_list):
 # Adding a new node while making sure it doesn't collide with any obstacles
 def add_new_node(viz_window,node_list,corner_node_list,obstacle_list):
 	while True:
-		#point = (random.random()*WINDOW_LENGTH,random.random()*WINDOW_BREADTH) # For Vanilla RRT*
+		#point = (random.random()*WINDOW_LENGTH,random.random()*WINDOW_BREADTH)
 		point = sample_point(corner_node_list)
 		nearest_node_dist = 1e7
 		nearest_node = None
@@ -233,7 +230,7 @@ def add_new_node(viz_window,node_list,corner_node_list,obstacle_list):
 		if new_pos[0] < 0 or new_pos[1] < 0 or new_pos[0] >= WINDOW_LENGTH or new_pos[1] >= WINDOW_BREADTH:
 			continue
 		if not in_obstacle(viz_window,new_pos):
-			new_node = Node(new_pos,False,False)
+			new_node = RRT_Node(new_pos,False,False)
 			new_node, success = find_proximal_node(new_node,node_list)
 			if not success:
 				new_node.parent = nearest_node
@@ -264,9 +261,9 @@ def display_final_path(viz_window,goal_node):
 		current_node = current_node.parent
 		WAYPOINTS.append([current_node.x,current_node.y])
 	WAYPOINTS.reverse()
-	print(WAYPOINTS)
+	# print(WAYPOINTS)
 	pygame.display.update()
-	pygame.image.save(viz_window,dir_name+"/frame"+str(frame_number)+".jpg")
+	#pygame.image.save(viz_window,dir_name+"/frame"+str(frame_number)+".jpg")
 	frame_number += 1
 
 # Highliting all the found RRT paths from starting to target node in Green
@@ -279,7 +276,7 @@ def display_all_paths(viz_window,goal_node):
 			pygame.draw.line(viz_window,GREEN,(current_node.x,current_node.y),(current_node.parent.x,current_node.parent.y),width=5)
 			current_node = current_node.parent
 	pygame.display.update()
-	pygame.image.save(viz_window,dir_name+"/frame"+str(frame_number)+".jpg")
+	#pygame.image.save(viz_window,dir_name+"/frame"+str(frame_number)+".jpg")
 	frame_number += 1
 
 # The Accelrated RRT* with LDV Algorithm Wrapper function
@@ -294,9 +291,6 @@ def acc_rrt_ldv_algorithm(viz_window,start_node,goal_node,obstacle_list):
 		current_time = time.time()
 		if current_time - start_time > MAX_EXECUTION_TIME:
 			display_final_path(viz_window,goal_node)
-			print("Goal Node Cost: ",goal_node.best_path_cost)
-			make_video(dir_name,vid_name)
-			shutil.rmtree(dir_name)
 			break
 		new_node, node_list, corner_node_list = add_new_node(viz_window,node_list,corner_node_list,obstacle_list)
 		if target_reached(new_node,goal_node):
@@ -308,6 +302,80 @@ def acc_rrt_ldv_algorithm(viz_window,start_node,goal_node,obstacle_list):
 				goal_node.best_path_cost = path_cost
 				goal_node.parent = new_node
 				display_all_paths(viz_window,goal_node)
+
+#Robot Controller Node
+class RobotControlNode(Node):
+	def __init__(self):
+		super().__init__('robot_control_node')
+		self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+	
+		self.subscription = self.create_subscription(
+			Odometry,
+			'/odom',
+			self.listener_callback,
+			10)
+		self.subscription  # prevent unused variable warning
+
+		self.waypoint_number = 0
+
+		self.timer = self.create_timer(0.1, self.drive_robot)
+
+		self.x = 1.0
+		self.y = 5.0
+		self.yaw = 0.0
+
+	def listener_callback(self, msg):
+		x = msg.pose.pose.position.x
+		y = msg.pose.pose.position.y
+		z = msg.pose.pose.position.z
+		qx = msg.pose.pose.orientation.x
+		qy = msg.pose.pose.orientation.y
+		qz = msg.pose.pose.orientation.z
+		qw = msg.pose.pose.orientation.w
+
+		(roll, pitch, yaw) = euler_from_quaternion([qx, qy, qz, qw])
+		self.x = x
+		self.y = y
+		self.yaw = np.degrees(yaw)
+
+	def drive_robot(self):
+		velocity_message = Twist()
+		x_waypoint = WAYPOINTS[self.waypoint_number][0]/100
+		y_waypoint = 10 - (WAYPOINTS[self.waypoint_number][1]/100)
+
+		if math.dist((self.x, self.y), (x_waypoint, y_waypoint)) > 0.1:
+			# Calculate the angle between the robot and the goal
+			yaw_err = np.rad2deg(np.arctan2(y_waypoint-self.y, x_waypoint-self.x)) - self.yaw
+			# Calculate the position error
+			dist_err= np.sqrt((self.x-x_waypoint)**2 + (self.y-y_waypoint)**2)
+			# Cap the distance error to 1, to avoid high linear velocities
+			dist_err = min(1, dist_err)
+
+			velocity_message.linear.x = 0.7 * dist_err
+			velocity_message.angular.z = 0.015 * yaw_err
+
+			# Publish the velocity message
+			self.cmd_vel_pub.publish(velocity_message)
+			time.sleep(0.1)
+		else:
+			if (self.waypoint_number+1) == len(WAYPOINTS):
+				velocity_message.linear.x = 0.0
+				velocity_message.angular.z = 0.0
+
+				# Publish the velocity message
+				self.cmd_vel_pub.publish(velocity_message)
+				print("GOAL REACHED")
+				self.destroy_node()
+			else:
+				self.waypoint_number = self.waypoint_number + 1
+
+
+def go_to_waypoints(args=None):
+	rclpy.init(args=args)
+	node = RobotControlNode()
+	node.drive_robot()
+	rclpy.spin(node)
+	rclpy.shutdown()
 
 if __name__ == "__main__":
 	# Initializing the grid world as a pygame display window,
@@ -321,22 +389,22 @@ if __name__ == "__main__":
 	start_pos, target_pos = None, None
 	start_node_found, target_node_found = False, False
 	start_node, target_node = None, None
-	os.mkdir(dir_name)
 	obstacle_list = initialize_obstacles(viz_window)
+
+	start_pos = (100,500)
+	start_node = RRT_Node(start_pos,True,False)
+	start_node.visualize_node(viz_window)
+	start_node_found = True
+
 	while execute:
 		for event in pygame.event.get():
 			if event.type == pygame.QUIT:
 				execute = False
 			elif pygame.mouse.get_pressed()[0]:
 				pos = pygame.mouse.get_pos()
-				if not start_node_found and pos!=target_pos:
-					start_pos = pos
-					start_node = Node(start_pos,True,False)
-					start_node.visualize_node(viz_window)
-					start_node_found = True
-				elif not target_node_found and pos!=start_pos:
+				if not target_node_found and pos!=start_pos:
 					target_pos = pos
-					target_node = Node(target_pos,False,True)
+					target_node = RRT_Node(target_pos,False,True)
 					target_node.visualize_node(viz_window)
 					target_node_found = True
 			if event.type == pygame.KEYDOWN:
@@ -345,3 +413,6 @@ if __name__ == "__main__":
 				if event.key == pygame.K_c:
 					start_node = None
 					goal_node_node = None
+	pygame.display.quit()
+	pygame.quit()
+	go_to_waypoints()
