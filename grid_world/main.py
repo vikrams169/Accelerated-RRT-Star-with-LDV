@@ -6,7 +6,6 @@ import numpy as np
 import pygame
 import math
 import random
-import cv2
 import imageio
 import shutil
 import time

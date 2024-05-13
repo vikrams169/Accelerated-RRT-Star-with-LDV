@@ -1,5 +1,5 @@
 # Accelerated RRT* with LDV
-## Implementation of the Accelerated RRT* with Local Directional Visibility (LDV) Algorithm
+Implementation of the Accelerated RRT* with Local Directional Visibility (LDV) Algorithm
 
 ### Authors
 
@@ -7,18 +7,16 @@
 
 **Vinay Lanka (vlanka@umd.edu)**
 
-Github link to repository - https://github.com/vinay-lanka/Dijkstra-Planner-Visualised
-
 ## Algorithm visualised
 
-This Python script (`Accelerated-RRT-Star-with-LDV/grid_world/main.py`) demonstrates the Accelerated RRT* with LDV algorithm (based on the paper linked [here](https://arxiv.org/abs/2207.08283)) for pathfinding in a 2D grid environment using PyGame for visualization. The script generates a map with obstacles and walls, allows the user to input a start and goal position, and then visualizes the process of finding the shortest path from the start to the goal using the algorithm.
+This Python script (`grid_world/main.py`) demonstrates the Accelerated RRT* with LDV algorithm (based on the paper linked [here](https://arxiv.org/abs/2207.08283)) for pathfinding in a 2D grid environment using PyGame for visualization. The script generates a map with obstacles and walls, allows the user to input a start and goal position, and then visualizes the process of finding the shortest path from the start to the goal using the algorithm.
 
 ## Dependencies
 The dependencies for this Python 3 project include the following:
 <ul>
 <li> NumPy
 <li> PyGame
-<li> OpenCV
+<li> ImageIO
 </ul>
 They can be installed using the following commands.
 
